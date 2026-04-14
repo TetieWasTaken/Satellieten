@@ -88,7 +88,7 @@ def get_sat_record(index=0, timeout=5.0):
 
 
 def sample_orbit(record, samples=180):
-    mean_motion = record["MEAN_MOTION"]  # rev/day
+    mean_motion = record["MEAN_MOTION"]
     period_minutes = 1440.0 / mean_motion
 
     now = datetime.now(timezone.utc)

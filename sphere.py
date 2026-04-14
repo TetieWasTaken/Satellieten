@@ -13,7 +13,6 @@ from panda3d.core import (
 def make_uv_sphere(radius=1.0, rings=64, segments=128):
     """
     Create a smooth UV sphere NodePath.
-    Higher rings/segments = smoother sphere.
     """
     fmt = GeomVertexFormat.getV3n3t2()
     vdata = GeomVertexData("sphere", fmt, Geom.UHStatic)
