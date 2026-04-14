@@ -8,7 +8,7 @@ from pathlib import Path
 EARTH_RADIUS_KM = 6371.0
 EARTH_RADIUS_UNITS = 2.0
 CACHE_FILE = Path("sat_cache.json")
-CELESTRAK_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=json"
+CELESTRAK_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=galileo&FORMAT=json"
 
 
 def _build_satrec(record):
