@@ -19,7 +19,7 @@ def _build_satrec(record):
     epoch_days = (epoch - epoch0).total_seconds() / 86400.0
 
     rev_per_day = record["MEAN_MOTION"]
-    no_kozai = rev_per_day * 2.0 * math.pi / 1440.0  # rad/min
+    no_kozai = rev_per_day * 2.0 * math.pi / 1440.0
     ndot = record["MEAN_MOTION_DOT"] * 2.0 * math.pi / (1440.0**2)
     nddot = record["MEAN_MOTION_DDOT"] * 2.0 * math.pi / (1440.0**3)
 

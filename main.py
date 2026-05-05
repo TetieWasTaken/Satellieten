@@ -230,6 +230,16 @@ class EarthViewer(ShowBase):
             align=TextNode.ALeft,
         )
 
+        self.money: int = 0
+
+        self.money_ui = OnscreenText(
+            text="",
+            pos=(1.28, 0.95),
+            scale=0.06,
+            fg=(0.2, 1.0, 0.2, 1.0),
+            align=TextNode.ARight,
+        )
+
         self.accept("mouse1", self.start_drag)
         self.accept("mouse1-up", self.stop_drag)
 
@@ -378,6 +388,9 @@ class EarthViewer(ShowBase):
             f"Selected: {selected_id}\n"
             f"[n] add  [m] remove  [tab] cycle  [c] clear"
         )
+
+        self.money_ui.setText(f"${self.money}")
+
         return Task.cont
 
     def speed_up(self) -> None:
@@ -405,6 +418,18 @@ class EarthViewer(ShowBase):
 
     def clear_satellites(self) -> None:
         self.sat_manager.clear_all()
+
+    def add_money(self, amount: int) -> None:
+        self.money += int(amount)
+
+    def spend_money(self, amount: int) -> bool:
+        amount = int(amount)
+        if amount <= 0:
+            return True
+        if self.money < amount:
+            return False
+        self.money -= amount
+        return True
 
 
 if __name__ == "__main__":
