@@ -47,6 +47,9 @@ def sat_record_to_pos(record, dt_utc=None):
     if dt_utc is None:
         dt_utc = datetime.now(timezone.utc)
 
+    if record.get("kind") == "custom":
+        return _custom_orbit_to_pos(record, dt_utc)
+
     sat = _build_satrec(record)
     jd, fr = jday(
         dt_utc.year,
@@ -88,6 +91,20 @@ def get_sat_record(index=0, timeout=5.0):
 
 
 def sample_orbit(record, samples=180):
+    if record.get("kind") == "custom":
+        altitude_km = float(record.get("altitude_km", 550.0))
+        r_km = EARTH_RADIUS_KM + altitude_km
+        mu = 398600.4418
+        n = math.sqrt(mu / (r_km**3))
+        period_seconds = (2.0 * math.pi) / n
+
+        now = datetime.now(timezone.utc)
+        points = []
+        for i in range(samples + 1):
+            t = now + timedelta(seconds=(period_seconds * i) / samples)
+            points.append(sat_record_to_pos(record, t))
+        return points
+
     mean_motion = record["MEAN_MOTION"]
     period_minutes = 1440.0 / mean_motion
 
@@ -98,3 +115,41 @@ def sample_orbit(record, samples=180):
         t = now + timedelta(minutes=minutes)
         points.append(sat_record_to_pos(record, t))
     return points
+
+
+def _custom_orbit_to_pos(record: dict, dt_utc: datetime) -> tuple[float, float, float]:
+    altitude_km = float(record.get("altitude_km", 550.0))
+    incl = math.radians(float(record.get("inclination_deg", 53.0)))
+    raan = math.radians(float(record.get("raan_deg", 0.0)))
+    phase0 = math.radians(float(record.get("phase_deg", 0.0)))
+
+    epoch_str = record.get("epoch_utc")
+    if epoch_str:
+        epoch = datetime.fromisoformat(epoch_str.replace("Z", "+00:00")).astimezone(
+            timezone.utc
+        )
+    else:
+        epoch = datetime.now(timezone.utc)
+
+    r_km = EARTH_RADIUS_KM + altitude_km
+
+    mu = 398600.4418
+    n = math.sqrt(mu / (r_km**3))
+
+    dt = (dt_utc - epoch).total_seconds()
+    theta = phase0 + n * dt
+
+    x_orb = r_km * math.cos(theta)
+    y_orb = r_km * math.sin(theta)
+    z_orb = 0.0
+
+    x1 = x_orb
+    y1 = y_orb * math.cos(incl) - z_orb * math.sin(incl)
+    z1 = y_orb * math.sin(incl) + z_orb * math.cos(incl)
+
+    x = x1 * math.cos(raan) - y1 * math.sin(raan)
+    y = x1 * math.sin(raan) + y1 * math.cos(raan)
+    z = z1
+
+    scale = EARTH_RADIUS_UNITS / EARTH_RADIUS_KM
+    return x * scale, y * scale, z * scale

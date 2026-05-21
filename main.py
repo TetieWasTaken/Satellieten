@@ -67,6 +67,8 @@ class SatelliteEntity:
         model.setPos(server.sat_record_to_pos(self.sat_record, sim_time))
         self.model = model
 
+        print("Spawned sat at", self.model.getPos())
+
     def _build_orbit_line(self) -> None:
         points = server.sample_orbit(self.sat_record, samples=240)
         segs = LineSegs()
@@ -129,6 +131,21 @@ class SatelliteManager:
             (0.9, 0.4, 1.0, 1.0),
             (1.0, 0.9, 0.3, 1.0),
         ]
+
+    def add_satellite_from_record(self, sat_record: dict, sim_time: datetime) -> bool:
+        if len(self.satellites) >= self.max_satellites:
+            return False
+
+        color = self.palette[len(self.satellites) % len(self.palette)]
+        sat = SatelliteEntity(
+            self.render, self.loader, sat_record, sim_time, color=color
+        )
+
+        self.satellites.append(sat)
+        self.selected_idx = len(self.satellites) - 1
+        self._refresh_selection()
+
+        return True
 
     def add_satellite_by_index(self, sat_index: int, sim_time: datetime) -> bool:
         if len(self.satellites) >= self.max_satellites:
@@ -601,17 +618,17 @@ class EarthViewer(ShowBase):
         self.purchase_msg["text"] = ""
         self._refresh_purchase_ui()
 
-    def _on_altitude_changed(self) -> None:
+    def _on_altitude_changed(self, *args) -> None:
         self.purchase_altitude_km = float(self.alt_slider["value"])
         self.purchase_msg["text"] = ""
         self._refresh_purchase_ui()
 
-    def _on_inclination_changed(self) -> None:
+    def _on_inclination_changed(self, *args) -> None:
         self.purchase_inclination_deg = float(self.inc_slider["value"])
         self.purchase_msg["text"] = ""
         self._refresh_purchase_ui()
 
-    def _on_size_changed(self) -> None:
+    def _on_size_changed(self, *args) -> None:
         self.purchase_size = float(self.size_slider["value"])
         self.purchase_msg["text"] = ""
         self._refresh_purchase_ui()
@@ -644,7 +661,7 @@ class EarthViewer(ShowBase):
             self.buy_button["state"] = "disabled"
             self.cost_value["text_fg"] = (1.0, 0.45, 0.45, 1)
 
-    def _buy_satellite_clicked(self) -> None:
+    def _buy_satellite_clicked(self, *args) -> None:
         alt = self.purchase_altitude_km
         inc = self.purchase_inclination_deg
         size = self.purchase_size
@@ -655,7 +672,19 @@ class EarthViewer(ShowBase):
             self._refresh_purchase_ui()
             return
 
+        sat_record = self._make_purchased_sat_record(alt, inc, size)
+
+        ok = self.sat_manager.add_satellite_from_record(sat_record, self.sim_time)
+        if not ok:
+            self.add_money(cost)
+            self.purchase_msg["text"] = (
+                f"Max satellites reached ({self.sat_manager.max_satellites})."
+            )
+            self._refresh_purchase_ui()
+            return
+
         order = {
+            "object_id": sat_record["OBJECT_ID"],
             "altitude_km": alt,
             "inclination_deg": inc,
             "size": size,
@@ -667,9 +696,26 @@ class EarthViewer(ShowBase):
         self.pending_purchases.append(order)
 
         self.purchase_msg["text"] = (
-            f"Purchased! (queued: {len(self.pending_purchases)})"
+            f"Purchased + spawned! (total: {len(self.pending_purchases)})"
         )
         self._refresh_purchase_ui()
+
+    def _make_purchased_sat_record(
+        self, altitude_km: float, inclination_deg: float, size: float
+    ) -> dict:
+        object_id = f"BUY-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+
+        return {
+            "kind": "custom",
+            "OBJECT_ID": object_id,
+            "altitude_km": float(altitude_km),
+            "inclination_deg": float(inclination_deg),
+            "raan_deg": 0.0,
+            "phase_deg": 0.0,
+            "epoch_utc": datetime.now(timezone.utc).isoformat(),
+            "size": float(size),
+            "power": float(size),
+        }
 
 
 if __name__ == "__main__":
