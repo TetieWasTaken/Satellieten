@@ -6,6 +6,12 @@ from panda3d.core import AmbientLight, DirectionalLight, Vec4
 from panda3d.core import NodePath, LineSegs, Material, TextureStage, TextNode
 from direct.task import Task
 from direct.gui.OnscreenText import OnscreenText
+from direct.gui.DirectGui import (
+    DirectFrame,
+    DirectLabel,
+    DirectButton,
+    DirectSlider,
+)
 from direct.showbase.ShowBaseGlobal import globalClock
 
 import math
@@ -230,7 +236,7 @@ class EarthViewer(ShowBase):
             align=TextNode.ALeft,
         )
 
-        self.money: int = 0
+        self.money: int = 10000
 
         self.money_ui = OnscreenText(
             text="",
@@ -239,6 +245,15 @@ class EarthViewer(ShowBase):
             fg=(0.2, 1.0, 0.2, 1.0),
             align=TextNode.ARight,
         )
+
+        self.pending_purchases: list[dict] = []
+
+        self.purchase_altitude_km = 200000
+        self.purchase_inclination_deg = 45.0
+        self.purchase_size = 1.0
+
+        self._build_purchase_ui()
+        self._refresh_purchase_ui()
 
         self.accept("mouse1", self.start_drag)
         self.accept("mouse1-up", self.stop_drag)
@@ -390,6 +405,7 @@ class EarthViewer(ShowBase):
         )
 
         self.money_ui.setText(f"${self.money}")
+        self._refresh_purchase_ui()
 
         return Task.cont
 
@@ -430,6 +446,230 @@ class EarthViewer(ShowBase):
             return False
         self.money -= amount
         return True
+
+    def _build_purchase_ui(self) -> None:
+        self.purchase_frame = DirectFrame(
+            frameColor=(0.05, 0.05, 0.08, 0.85),
+            frameSize=(-0.62, 0.62, -0.34, 0.34),
+            pos=(-0.62, 0, -0.62),
+            scale=0.82,
+        )
+
+        self.purchase_title = DirectLabel(
+            parent=self.purchase_frame,
+            text="Purchase Satellite",
+            scale=0.06,
+            pos=(0, 0, 0.26),
+            text_fg=(1, 1, 1, 1),
+            frameColor=(0, 0, 0, 0),
+        )
+
+        self.alt_label = DirectLabel(
+            parent=self.purchase_frame,
+            text="Altitude (km):",
+            scale=0.045,
+            pos=(-0.50, 0, 0.14),
+            text_align=TextNode.ALeft,
+            text_fg=(0.9, 0.9, 0.9, 1),
+            frameColor=(0, 0, 0, 0),
+        )
+        self.alt_value = DirectLabel(
+            parent=self.purchase_frame,
+            text="",
+            scale=0.045,
+            pos=(0.52, 0, 0.14),
+            text_align=TextNode.ARight,
+            text_fg=(0.9, 0.9, 0.9, 1),
+            frameColor=(0, 0, 0, 0),
+        )
+        self.alt_slider = DirectSlider(
+            parent=self.purchase_frame,
+            range=(200.0, 200000.0),
+            value=self.purchase_altitude_km,
+            pageSize=25.0,
+            scale=0.5,
+            pos=(0.0, 0, 0.08),
+            command=self._on_altitude_changed,
+        )
+
+        self.inc_label = DirectLabel(
+            parent=self.purchase_frame,
+            text="Inclination (deg):",
+            scale=0.045,
+            pos=(-0.50, 0, -0.02),
+            text_align=TextNode.ALeft,
+            text_fg=(0.9, 0.9, 0.9, 1),
+            frameColor=(0, 0, 0, 0),
+        )
+        self.inc_value = DirectLabel(
+            parent=self.purchase_frame,
+            text="",
+            scale=0.045,
+            pos=(0.52, 0, -0.02),
+            text_align=TextNode.ARight,
+            text_fg=(0.9, 0.9, 0.9, 1),
+            frameColor=(0, 0, 0, 0),
+        )
+        self.inc_slider = DirectSlider(
+            parent=self.purchase_frame,
+            range=(0.0, 180.0),  # degrees
+            value=self.purchase_inclination_deg,
+            pageSize=5.0,
+            scale=0.5,
+            pos=(0.0, 0, -0.08),
+            command=self._on_inclination_changed,
+        )
+
+        self.size_label = DirectLabel(
+            parent=self.purchase_frame,
+            text="Size / Power:",
+            scale=0.045,
+            pos=(-0.50, 0, -0.18),
+            text_align=TextNode.ALeft,
+            text_fg=(0.9, 0.9, 0.9, 1),
+            frameColor=(0, 0, 0, 0),
+        )
+        self.size_value = DirectLabel(
+            parent=self.purchase_frame,
+            text="",
+            scale=0.045,
+            pos=(0.52, 0, -0.18),
+            text_align=TextNode.ARight,
+            text_fg=(0.9, 0.9, 0.9, 1),
+            frameColor=(0, 0, 0, 0),
+        )
+        self.size_slider = DirectSlider(
+            parent=self.purchase_frame,
+            range=(0.5, 3.0),
+            value=self.purchase_size,
+            pageSize=0.1,
+            scale=0.5,
+            pos=(0.0, 0, -0.24),
+            command=self._on_size_changed,
+        )
+
+        self.cost_label = DirectLabel(
+            parent=self.purchase_frame,
+            text="Cost:",
+            scale=0.05,
+            pos=(-0.50, 0, -0.30),
+            text_align=TextNode.ALeft,
+            text_fg=(1.0, 0.9, 0.3, 1),
+            frameColor=(0, 0, 0, 0),
+        )
+        self.cost_value = DirectLabel(
+            parent=self.purchase_frame,
+            text="",
+            scale=0.05,
+            pos=(0.52, 0, -0.30),
+            text_align=TextNode.ARight,
+            text_fg=(1.0, 0.9, 0.3, 1),
+            frameColor=(0, 0, 0, 0),
+        )
+
+        self.buy_button = DirectButton(
+            parent=self.purchase_frame,
+            text="BUY",
+            scale=0.06,
+            pos=(0.30, 0, -0.30),
+            command=self._buy_satellite_clicked,
+        )
+        self.reset_button = DirectButton(
+            parent=self.purchase_frame,
+            text="Reset",
+            scale=0.05,
+            pos=(0.02, 0, -0.30),
+            command=self._reset_purchase_defaults,
+        )
+
+        self.purchase_msg = DirectLabel(
+            parent=self.purchase_frame,
+            text="",
+            scale=0.045,
+            pos=(0.0, 0, 0.205),
+            text_fg=(1.0, 0.5, 0.5, 1),
+            frameColor=(0, 0, 0, 0),
+        )
+
+    def _reset_purchase_defaults(self) -> None:
+        self.purchase_altitude_km = 550.0
+        self.purchase_inclination_deg = 53.0
+        self.purchase_size = 1.0
+        self.alt_slider["value"] = self.purchase_altitude_km
+        self.inc_slider["value"] = self.purchase_inclination_deg
+        self.size_slider["value"] = self.purchase_size
+        self.purchase_msg["text"] = ""
+        self._refresh_purchase_ui()
+
+    def _on_altitude_changed(self) -> None:
+        self.purchase_altitude_km = float(self.alt_slider["value"])
+        self.purchase_msg["text"] = ""
+        self._refresh_purchase_ui()
+
+    def _on_inclination_changed(self) -> None:
+        self.purchase_inclination_deg = float(self.inc_slider["value"])
+        self.purchase_msg["text"] = ""
+        self._refresh_purchase_ui()
+
+    def _on_size_changed(self) -> None:
+        self.purchase_size = float(self.size_slider["value"])
+        self.purchase_msg["text"] = ""
+        self._refresh_purchase_ui()
+
+    def _estimate_satellite_cost(
+        self, altitude_km: float, inclination_deg: float, size: float
+    ) -> int:
+        base = 250
+        altitude_cost = int(max(0.0, altitude_km - 200.0) * 0.35)
+        incl_cost = int(abs(inclination_deg - 53.0) * 3.0)
+        size_cost = int(200 * (size**2))
+        return base + altitude_cost + incl_cost + size_cost
+
+    def _refresh_purchase_ui(self) -> None:
+        alt = self.purchase_altitude_km
+        inc = self.purchase_inclination_deg
+        size = self.purchase_size
+
+        self.alt_value["text"] = f"{alt:.0f}"
+        self.inc_value["text"] = f"{inc:.0f}"
+        self.size_value["text"] = f"{size:.2f}x"
+
+        cost = self._estimate_satellite_cost(alt, inc, size)
+        self.cost_value["text"] = f"${cost}"
+
+        if self.money >= cost:
+            self.buy_button["state"] = "normal"
+            self.cost_value["text_fg"] = (1.0, 0.9, 0.3, 1)
+        else:
+            self.buy_button["state"] = "disabled"
+            self.cost_value["text_fg"] = (1.0, 0.45, 0.45, 1)
+
+    def _buy_satellite_clicked(self) -> None:
+        alt = self.purchase_altitude_km
+        inc = self.purchase_inclination_deg
+        size = self.purchase_size
+        cost = self._estimate_satellite_cost(alt, inc, size)
+
+        if not self.spend_money(cost):
+            self.purchase_msg["text"] = "Not enough money!"
+            self._refresh_purchase_ui()
+            return
+
+        order = {
+            "altitude_km": alt,
+            "inclination_deg": inc,
+            "size": size,
+            "cost": cost,
+            "purchased_at_utc": datetime.now(timezone.utc).strftime(
+                "%Y-%m-%d %H:%M:%S UTC"
+            ),
+        }
+        self.pending_purchases.append(order)
+
+        self.purchase_msg["text"] = (
+            f"Purchased! (queued: {len(self.pending_purchases)})"
+        )
+        self._refresh_purchase_ui()
 
 
 if __name__ == "__main__":
