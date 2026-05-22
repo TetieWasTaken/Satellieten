@@ -413,11 +413,23 @@ class EarthViewer(ShowBase):
         selected = self.sat_manager.get_selected_record()
         selected_id = selected["OBJECT_ID"] if selected else "None"
 
+        cov_line = ""
+        if selected:
+            m = self.satellite_coverage_metrics(selected)
+            if m["altitude_km"] is not None:
+                cov_line = (
+                    f"\nCoverage: {m['footprint_fraction'] * 100:.1f}%  "
+                    f"Power: {m['power_percent'] * 100:.1f}%  "
+                    f"Effective: {m['effective_coverage'] * 100:.1f}%"
+                )
+            else:
+                cov_line = f"\nCoverage: unknown"
+
         self.hud.setText(
             f"Sim time: {self.sim_time.strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
             f"Time scale: {self.time_scale:.2f}x\n"
             f"Satellites: {len(self.sat_manager.satellites)}/{self.sat_manager.max_satellites}\n"
-            f"Selected: {selected_id}\n"
+            f"Selected: {selected_id}{cov_line}\n"
             f"[n] add  [m] remove  [tab] cycle  [c] clear"
         )
 
@@ -715,6 +727,63 @@ class EarthViewer(ShowBase):
             "epoch_utc": datetime.now(timezone.utc).isoformat(),
             "size": float(size),
             "power": float(size),
+        }
+
+    def _satellite_altitude_km(self, record: dict) -> float | None:
+        if record.get("kind") == "custom":
+            return float(record.get("altitude_km", 0.0))
+        return None
+
+    def _satellite_strength(self, record: dict) -> float:
+        if "power" in record:
+            return float(record.get("power", 1.0))
+        if "size" in record:
+            return float(record.get("size", 1.0))
+        return 1.0
+
+    def coverage_footprint_fraction(self, altitude_km: float) -> float:
+        R = 6371.0
+        h = max(0.0, float(altitude_km))
+        cos_alpha = R / (R + h) if (R + h) > 0 else 1.0
+        cos_alpha = max(-1.0, min(1.0, cos_alpha))
+        alpha = math.acos(cos_alpha)
+        return (1.0 - math.cos(alpha)) / 2.0
+
+    def coverage_power_percent(self, altitude_km: float, strength: float) -> float:
+        h = max(0.0, float(altitude_km))
+        s = max(0.0, float(strength))
+
+        h0 = 550.0
+        k = 1.25
+
+        raw = s / ((1.0 + (h / h0)) ** 2)
+        p = 1.0 - math.exp(-k * raw)
+        return max(0.0, min(1.0, p))
+
+    def satellite_coverage_metrics(self, record: dict) -> dict:
+        alt = self._satellite_altitude_km(record)
+        strength = self._satellite_strength(record)
+
+        if alt is None:
+            return {
+                "altitude_km": None,
+                "strength": strength,
+                "footprint_fraction": 0.0,
+                "power_percent": 0.0,
+                "effective_coverage": 0.0,
+            }
+
+        footprint = self.coverage_footprint_fraction(alt)
+        power = self.coverage_power_percent(alt, strength)
+        effective = footprint * power
+
+        return {
+            "altitude_km": alt,
+            "strength": strength,
+            "footprint_fraction": footprint,
+            "power_percent": power,
+            "effective_coverage": effective,
+            "note": "",
         }
 
 
