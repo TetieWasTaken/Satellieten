@@ -4,6 +4,7 @@
 from direct.showbase.ShowBase import ShowBase
 from panda3d.core import AmbientLight, DirectionalLight, Vec4
 from panda3d.core import NodePath, LineSegs, Material, TextureStage, TextNode
+from panda3d.core import PNMImage, Texture
 from direct.task import Task
 from direct.gui.OnscreenText import OnscreenText
 from direct.gui.DirectGui import (
@@ -33,6 +34,117 @@ def gmst_degrees(dt_utc: datetime) -> float:
         - (t**3 / 38710000.0)
     )
     return gmst % 360.0
+
+
+class CoverageOverlay:
+    def __init__(
+        self,
+        earth_np: NodePath,
+        size: int = 256,
+        update_every_n_frames: int = 3,
+    ) -> None:
+        self.earth_np = earth_np
+        self.size = size
+        self.update_every_n_frames = update_every_n_frames
+
+        self.frame_counter = 0
+
+        self.img = PNMImage(self.size, self.size)
+        self.img.fill(0.0, 0.0, 0.0)
+        self.img.alphaFill(0.0)
+
+        self.tex = Texture("coverage_overlay")
+        self.tex.load(self.img)
+        self.tex.setMinfilter(Texture.FTLinear)
+        self.tex.setMagfilter(Texture.FTLinear)
+
+        self.stage = TextureStage("coverage_stage")
+        self.stage.setSort(10)
+
+        self.earth_np.setTexture(self.stage, self.tex, 1)
+        self.stage.setColor((1, 1, 1, 1))
+        self.stage.setMode(TextureStage.MAdd)
+
+        self.earth_np.setTexOffset(self.stage, 0.5, 0.0)
+
+    def _set_px(self, x: int, y: int, r: float, g: float, b: float, a: float) -> None:
+        self.img.setXelA(x, y, r, g, b, a)
+
+    def update(self, satellites: list["SatelliteEntity"], viewer) -> None:
+        self.frame_counter += 1
+        if self.frame_counter % self.update_every_n_frames != 0:
+            return
+
+        self.img.fill(0.0, 0.0, 0.0)
+        self.img.alphaFill(0.0)
+
+        for sat in satellites:
+            rec = sat.sat_record
+            team = rec.get("team", "player")
+
+            m = viewer.satellite_coverage_metrics(rec)
+            alt = m["altitude_km"]
+            if alt is None:
+                continue
+
+            strength = float(m["power_percent"])
+            if strength <= 1e-4:
+                continue
+
+            sub = viewer.subsatellite_latlon(rec)
+            if sub is None:
+                continue
+            sub_lat, sub_lon = sub
+
+            R = 6371.0
+            h = max(0.0, float(alt))
+            alpha = math.acos(max(-1.0, min(1.0, R / (R + h))))
+            radius_deg = math.degrees(alpha)
+
+            cx = int(((sub_lon + 180.0) / 360.0) * (self.size - 1))
+            cy = int(((sub_lat + 90.0) / 180.0) * (self.size - 1))
+
+            rp = int((radius_deg / 180.0) * (self.size - 1))
+            rp = max(1, min(self.size // 2, rp))
+
+            if team == "enemy":
+                r0, g0, b0 = (1.0, 0.15, 0.15)
+            else:
+                r0, g0, b0 = (0.15, 0.45, 1.0)
+
+            for dy in range(-rp, rp + 1):
+                y = cy + dy
+                if y < 0 or y >= self.size:
+                    continue
+
+                for dx in range(-rp, rp + 1):
+                    if dx * dx + dy * dy > rp * rp:
+                        continue
+
+                    x = (cx + dx) % self.size
+
+                    d = math.sqrt(dx * dx + dy * dy) / max(1.0, rp)
+
+                    edge = max(0.0, 1.0 - d)
+
+                    brightness = (0.35 + 0.65 * edge) * (0.35 + 1.35 * strength)
+                    brightness = max(0.0, min(1.0, brightness))
+
+                    r = r0 * brightness
+                    g = g0 * brightness
+                    b = b0 * brightness
+
+                    a = 0.85 * brightness
+
+                    pr, pg, pb, pa = self.img.getXelA(x, y)
+                    nr = min(1.0, pr + r)
+                    ng = min(1.0, pg + g)
+                    nb = min(1.0, pb + b)
+                    na = min(1.0, pa + a)
+
+                    self.img.setXelA(x, y, nr, ng, nb, na)
+
+        self.tex.load(self.img)
 
 
 class SatelliteEntity:
@@ -265,7 +377,7 @@ class EarthViewer(ShowBase):
 
         self.pending_purchases: list[dict] = []
 
-        self.purchase_altitude_km = 200000
+        self.purchase_altitude_km = 550.0
         self.purchase_inclination_deg = 45.0
         self.purchase_size = 1.0
 
@@ -297,6 +409,25 @@ class EarthViewer(ShowBase):
         self.taskMgr.add(self.zoom_task, "ZoomTask")
         self.taskMgr.add(self.update_simulation_task, "UpdateSimulation")
         self.taskMgr.add(self.update_hud_task, "UpdateHud")
+
+        self.taskMgr.add(self.update_coverage_overlay_task, "UpdateCoverageOverlay")
+
+        self.accept("r", self.spawn_test_enemy_satellite)
+
+    def spawn_test_enemy_satellite(self) -> None:
+        rec = {
+            "kind": "custom",
+            "team": "enemy",
+            "OBJECT_ID": f"ENEMY-{datetime.now(timezone.utc).strftime('%H%M%S')}",
+            "altitude_km": 1200.0,
+            "inclination_deg": 98.0,
+            "raan_deg": 0.0,
+            "phase_deg": 0.0,
+            "epoch_utc": datetime.now(timezone.utc).isoformat(),
+            "size": 1.2,
+            "power": 1.2,
+        }
+        self.sat_manager.add_satellite_from_record(rec, self.sim_time)
 
     def setup_lighting(self) -> None:
         ambient = AmbientLight("ambient")
@@ -336,6 +467,12 @@ class EarthViewer(ShowBase):
         mat.setShininess(24.0)
         mat.setSpecular(Vec4(0.6, 0.6, 0.6, 1))
         self.earth.setMaterial(mat, 1)
+
+        self.coverage_overlay = CoverageOverlay(
+            earth_np=self.earth,
+            size=128,
+            update_every_n_frames=10,
+        )
 
     def update_camera(self) -> None:
         h_rad = math.radians(self.camera_h)
@@ -513,7 +650,7 @@ class EarthViewer(ShowBase):
         )
         self.alt_slider = DirectSlider(
             parent=self.purchase_frame,
-            range=(200.0, 200000.0),
+            range=(200.0, 40000.0),
             value=self.purchase_altitude_km,
             pageSize=25.0,
             scale=0.5,
@@ -541,7 +678,7 @@ class EarthViewer(ShowBase):
         )
         self.inc_slider = DirectSlider(
             parent=self.purchase_frame,
-            range=(0.0, 180.0),  # degrees
+            range=(0.0, 180.0),
             value=self.purchase_inclination_deg,
             pageSize=5.0,
             scale=0.5,
@@ -719,6 +856,7 @@ class EarthViewer(ShowBase):
 
         return {
             "kind": "custom",
+            "team": "player",
             "OBJECT_ID": object_id,
             "altitude_km": float(altitude_km),
             "inclination_deg": float(inclination_deg),
@@ -753,11 +891,12 @@ class EarthViewer(ShowBase):
         h = max(0.0, float(altitude_km))
         s = max(0.0, float(strength))
 
-        h0 = 550.0
-        k = 1.25
+        h0 = 800.0
+        gain = 3.5
 
-        raw = s / ((1.0 + (h / h0)) ** 2)
-        p = 1.0 - math.exp(-k * raw)
+        raw = gain * s / ((1.0 + (h / h0)) ** 2)
+
+        p = 1.0 - math.exp(-raw)
         return max(0.0, min(1.0, p))
 
     def satellite_coverage_metrics(self, record: dict) -> dict:
@@ -785,6 +924,56 @@ class EarthViewer(ShowBase):
             "effective_coverage": effective,
             "note": "",
         }
+
+    def subsatellite_latlon(self, sat_record: dict) -> tuple[float, float] | None:
+        try:
+            x, y, z = server.sat_record_to_pos(sat_record, self.sim_time)
+        except Exception:
+            return None
+
+        p_render = self.render.getRelativePoint(self.render, (x, y, z))
+        p_earth = self.earth_root.getRelativePoint(self.render, p_render)
+
+        vx, vy, vz = float(p_earth.x), float(p_earth.y), float(p_earth.z)
+        r = math.sqrt(vx * vx + vy * vy + vz * vz)
+        if r <= 1e-8:
+            return None
+
+        lat = -math.degrees(math.asin(vz / r))
+        lon = math.degrees(math.atan2(vy, vx))
+        return (lat, lon)
+
+    def _tile_in_footprint(
+        self,
+        altitude_km: float,
+        tile_lat: float,
+        tile_lon: float,
+        sub_lat: float,
+        sub_lon: float,
+    ) -> bool:
+        R = 6371.0
+        h = max(0.0, float(altitude_km))
+
+        cos_alpha = R / (R + h)
+        cos_alpha = max(-1.0, min(1.0, cos_alpha))
+        alpha = math.acos(cos_alpha)
+
+        lat1 = math.radians(tile_lat)
+        lon1 = math.radians(tile_lon)
+        lat2 = math.radians(sub_lat)
+        lon2 = math.radians(sub_lon)
+
+        cos_d = math.sin(lat1) * math.sin(lat2) + math.cos(lat1) * math.cos(
+            lat2
+        ) * math.cos(lon1 - lon2)
+        cos_d = max(-1.0, min(1.0, cos_d))
+        d = math.acos(cos_d)
+
+        return d <= alpha
+
+    def update_coverage_overlay_task(self, __task__):
+        self.coverage_overlay.update(self.sat_manager.satellites, self)
+        return Task.cont
 
 
 if __name__ == "__main__":
