@@ -70,13 +70,16 @@ class CoverageOverlay:
     def _set_px(self, x: int, y: int, r: float, g: float, b: float, a: float) -> None:
         self.img.setXelA(x, y, r, g, b, a)
 
-    def update(self, satellites: list["SatelliteEntity"], viewer) -> None:
+    def update(self, satellites: list["SatelliteEntity"], viewer) -> dict | None:
         self.frame_counter += 1
         if self.frame_counter % self.update_every_n_frames != 0:
             return
 
         self.img.fill(0.0, 0.0, 0.0)
         self.img.alphaFill(0.0)
+
+        player_grid = [[0.0] * self.size for _ in range(self.size)]
+        enemy_grid = [[0.0] * self.size for _ in range(self.size)]
 
         for sat in satellites:
             rec = sat.sat_record
@@ -144,7 +147,35 @@ class CoverageOverlay:
 
                     self.img.setXelA(x, y, nr, ng, nb, na)
 
+                    contrib = brightness
+                    if team == "enemy":
+                        enemy_grid[y][x] = min(1.0, enemy_grid[y][x] + contrib)
+                    else:
+                        player_grid[y][x] = min(1.0, player_grid[y][x] + contrib)
+
+        share_sum = 0.0
+        contested = 0
+
+        for y in range(self.size):
+            row_p = player_grid[y]
+            row_e = enemy_grid[y]
+            for x in range(self.size):
+                p = row_p[x]
+                e = row_e[x]
+                tot = p + e
+                if tot <= 1e-6:
+                    continue
+                contested += 1
+                share_sum += p / tot
+
+        avg_share = (share_sum / contested) if contested > 0 else 0.0
+
         self.tex.load(self.img)
+
+        return {
+            "avg_player_share": avg_share,
+            "contested_tiles": contested,
+        }
 
 
 class SatelliteEntity:
@@ -381,6 +412,9 @@ class EarthViewer(ShowBase):
         self.purchase_inclination_deg = 45.0
         self.purchase_size = 1.0
 
+        self.income_per_sec: float = 0.0
+        self.base_income_per_sec: float = 250.0
+
         self._build_purchase_ui()
         self._refresh_purchase_ui()
 
@@ -411,6 +445,8 @@ class EarthViewer(ShowBase):
         self.taskMgr.add(self.update_hud_task, "UpdateHud")
 
         self.taskMgr.add(self.update_coverage_overlay_task, "UpdateCoverageOverlay")
+
+        self.taskMgr.add(self.earn_money_task, "EarnMoney")
 
         self.accept("r", self.spawn_test_enemy_satellite)
 
@@ -567,7 +603,8 @@ class EarthViewer(ShowBase):
             f"Time scale: {self.time_scale:.2f}x\n"
             f"Satellites: {len(self.sat_manager.satellites)}/{self.sat_manager.max_satellites}\n"
             f"Selected: {selected_id}{cov_line}\n"
-            f"[n] add  [m] remove  [tab] cycle  [c] clear"
+            f"[n] add  [m] remove  [tab] cycle  [c] clear\n"
+            f"Income: ${self.income_per_sec:.0f}/s"
         )
 
         self.money_ui.setText(f"${self.money}")
@@ -972,7 +1009,16 @@ class EarthViewer(ShowBase):
         return d <= alpha
 
     def update_coverage_overlay_task(self, __task__):
-        self.coverage_overlay.update(self.sat_manager.satellites, self)
+        stats = self.coverage_overlay.update(self.sat_manager.satellites, self)
+        if stats is not None:
+            self.income_per_sec = self.base_income_per_sec * float(
+                stats["avg_player_share"]
+            )
+        return Task.cont
+
+    def earn_money_task(self, __task__):
+        dt = globalClock.getDt()
+        self.money += int(self.income_per_sec * dt)
         return Task.cont
 
 
