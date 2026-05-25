@@ -16,6 +16,7 @@ from direct.gui.DirectGui import (
 from direct.showbase.ShowBaseGlobal import globalClock
 
 import math
+import random
 from datetime import datetime, timezone, timedelta
 
 import server
@@ -295,14 +296,17 @@ class SatelliteManager:
             return False
 
         sat_record = server.get_sat_record(sat_index)
+
         color = self.palette[len(self.satellites) % len(self.palette)]
         sat = SatelliteEntity(
             self.render, self.loader, sat_record, sim_time, color=color
         )
+
         self.satellites.append(sat)
         self.selected_idx = len(self.satellites) - 1
         self.next_spawn_index = sat_index + 1
         self._refresh_selection()
+
         return True
 
     def add_next_satellite(self, sim_time: datetime) -> bool:
@@ -367,8 +371,18 @@ class EarthViewer(ShowBase):
         self.sim_time = datetime.now(timezone.utc)
         self.time_scale = 1.0
 
-        self.sat_manager = SatelliteManager(self.render, self.loader, max_satellites=10)
-        self.sat_manager.add_next_satellite(self.sim_time)
+        self.sat_manager = SatelliteManager(
+            self.render, self.loader, max_satellites=100
+        )
+
+        self.enemy_spawn_interval_s = 60.0
+        self.enemy_next_spawn_time = self.sim_time + timedelta(
+            seconds=self.enemy_spawn_interval_s
+        )
+
+        self.enemy_galileo_indices: list[int] = list(range(0, 32))
+        random.shuffle(self.enemy_galileo_indices)
+        self.enemy_galileo_cursor = 0
 
         self.camera_distance = 12.0
         self.camera_h = 45.0
@@ -447,6 +461,8 @@ class EarthViewer(ShowBase):
         self.taskMgr.add(self.update_coverage_overlay_task, "UpdateCoverageOverlay")
 
         self.taskMgr.add(self.earn_money_task, "EarnMoney")
+
+        self.taskMgr.add(self.enemy_spawn_task, "EnemySpawnTask")
 
         self.accept("r", self.spawn_test_enemy_satellite)
 
@@ -612,6 +628,38 @@ class EarthViewer(ShowBase):
 
         return Task.cont
 
+    def enemy_spawn_task(self, __task__):
+        if self.sim_time < self.enemy_next_spawn_time:
+            return Task.cont
+
+        while self.sim_time >= self.enemy_next_spawn_time:
+            self.enemy_next_spawn_time += timedelta(seconds=self.enemy_spawn_interval_s)
+
+        # Spawn next Galileo sat (random order)
+        while self.enemy_galileo_cursor < len(self.enemy_galileo_indices):
+            idx = self.enemy_galileo_indices[self.enemy_galileo_cursor]
+            self.enemy_galileo_cursor += 1
+
+            try:
+                rec = server.get_sat_record(idx)
+            except Exception:
+                print(
+                    "[enemy] No more Galileo records (or fetch failed). Stopping spawns."
+                )
+                self.enemy_galileo_cursor = len(self.enemy_galileo_indices)
+                return Task.cont
+
+            rec["team"] = "enemy"
+            ok = self.sat_manager.add_satellite_from_record(rec, self.sim_time)
+            if ok:
+                print(f"[enemy] Spawned Galileo index {idx}")
+            else:
+                print("[enemy] Max satellites reached; cannot spawn more.")
+                self.enemy_galileo_cursor = len(self.enemy_galileo_indices)
+            break
+
+        return Task.cont
+
     def speed_up(self) -> None:
         self.time_scale *= 2.0
 
@@ -649,6 +697,22 @@ class EarthViewer(ShowBase):
             return False
         self.money -= amount
         return True
+
+    def _infer_altitude_km_from_pos(self, sat_record: dict) -> float | None:
+        try:
+            x, y, z = server.sat_record_to_pos(sat_record, self.sim_time)
+        except Exception:
+            return None
+
+        r_units = math.sqrt(
+            float(x) * float(x) + float(y) * float(y) + float(z) * float(z)
+        )
+        if r_units <= 1e-8:
+            return None
+
+        r_km = r_units * (server.EARTH_RADIUS_KM / server.EARTH_RADIUS_UNITS)
+        alt_km = r_km - server.EARTH_RADIUS_KM
+        return max(0.0, alt_km)
 
     def _build_purchase_ui(self) -> None:
         self.purchase_frame = DirectFrame(
@@ -907,14 +971,16 @@ class EarthViewer(ShowBase):
     def _satellite_altitude_km(self, record: dict) -> float | None:
         if record.get("kind") == "custom":
             return float(record.get("altitude_km", 0.0))
-        return None
+
+        return self._infer_altitude_km_from_pos(record)
 
     def _satellite_strength(self, record: dict) -> float:
         if "power" in record:
             return float(record.get("power", 1.0))
         if "size" in record:
             return float(record.get("size", 1.0))
-        return 1.0
+
+        return 3.0
 
     def coverage_footprint_fraction(self, altitude_km: float) -> float:
         R = 6371.0

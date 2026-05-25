@@ -77,13 +77,20 @@ def get_sat_record(index=0, timeout=5.0):
         data = json.loads(res_json)
 
         CACHE_FILE.write_text(json.dumps(data[index], indent=2))
-        return data[index]
+
+        modified = data[index]
+        modified["team"] = "enemy"
+
+        return modified
 
     except Exception as e:
         print(f"[WARN] Live fetch failed: {e}")
         if CACHE_FILE.exists():
             print("[INFO] Using cached satellite data.")
-            return json.loads(CACHE_FILE.read_text())
+            modified = json.loads(CACHE_FILE.read_text())
+            modified["team"] = "enemy"
+
+            return modified
 
         raise RuntimeError(
             "No satellite data available (live fetch failed and cache missing)."
