@@ -169,12 +169,14 @@ class CoverageOverlay:
                 contested += 1
                 share_sum += p / tot
 
-        avg_share = (share_sum / contested) if contested > 0 else 0.0
+        avg_player_share = (share_sum / contested) if contested > 0 else 0.0
+        avg_enemy_share = 1.0 - avg_player_share if contested > 0 else 0.0
 
         self.tex.load(self.img)
 
         return {
-            "avg_player_share": avg_share,
+            "avg_player_share": avg_player_share,
+            "avg_enemy_share": avg_enemy_share,
             "contested_tiles": contested,
         }
 
@@ -442,7 +444,7 @@ class EarthViewer(ShowBase):
         self.income_per_sec: float = 0.0
         self.base_income_per_sec: float = 250.0
 
-        self.enemy_money: float = 25000.0
+        self.enemy_money: float = 5000.0
         self.enemy_income_per_sec: float = 180.0
         self.enemy_kill_check_interval_s = 20.0
         self.enemy_next_kill_check = datetime.now(timezone.utc) + timedelta(
@@ -705,7 +707,7 @@ class EarthViewer(ShowBase):
             f"{del_line}\n"
             f"Select enemy: [Tab]=next  [Backspace]=prev\n"
             f"Income: ${self.income_per_sec:.0f}/s\n"
-            f"Enemy money: ${self.enemy_money}\n"
+            f"Enemy money: ${self.enemy_money:,.0f}\n"
             f"{self.event_msg}"
         )
 
@@ -1277,9 +1279,11 @@ class EarthViewer(ShowBase):
     def update_coverage_overlay_task(self, __task__):
         stats = self.coverage_overlay.update(self.sat_manager.satellites, self)
         if stats is not None:
-            self.income_per_sec = self.base_income_per_sec * float(
-                stats["avg_player_share"]
-            )
+            p_share = float(stats["avg_player_share"])
+            e_share = float(stats["avg_enemy_share"])
+
+            self.income_per_sec = self.base_income_per_sec * p_share
+            self.enemy_income_per_sec = self.base_income_per_sec * e_share
         return Task.cont
 
     def earn_money_task(self, __task__):
