@@ -216,7 +216,13 @@ class SatelliteEntity:
     def _build_orbit_line(self) -> None:
         points = server.sample_orbit(self.sat_record, samples=240)
         segs = LineSegs()
-        segs.setColor(0.75, 0.85, 1.0, 1.0)
+        team = self.sat_record.get("team", "player")
+
+        if team == "enemy":
+            segs.setColor(1.0, 0.25, 0.25, 1.0)
+        else:
+            segs.setColor(0.25, 0.55, 1.0, 1.0)
+
         segs.setThickness(1.5)
 
         if points:
@@ -375,7 +381,7 @@ class EarthViewer(ShowBase):
             self.render, self.loader, max_satellites=100
         )
 
-        self.enemy_spawn_interval_s = 60.0
+        self.enemy_spawn_interval_s = 3840.0
         self.enemy_next_spawn_time = self.sim_time + timedelta(
             seconds=self.enemy_spawn_interval_s
         )
@@ -456,6 +462,26 @@ class EarthViewer(ShowBase):
 
         self.taskMgr.add(self.enemy_spawn_task, "EnemySpawnTask")
 
+        self.spawn_initial_enemy_galileo()
+
+    def spawn_initial_enemy_galileo(self) -> None:
+        if not self.enemy_galileo_indices:
+            return
+
+        idx = self.enemy_galileo_indices[self.enemy_galileo_cursor]
+        self.enemy_galileo_cursor += 1
+
+        try:
+            rec = server.get_sat_record(idx)
+        except Exception as e:
+            print("[enemy] Failed to spawn initial Galileo:", e)
+            return
+
+        rec["team"] = "enemy"
+        ok = self.sat_manager.add_satellite_from_record(rec, self.sim_time)
+        if ok:
+            print(f"[enemy] Spawned initial Galileo index {idx}")
+
     def spawn_test_enemy_satellite(self) -> None:
         rec = {
             "kind": "custom",
@@ -512,8 +538,8 @@ class EarthViewer(ShowBase):
 
         self.coverage_overlay = CoverageOverlay(
             earth_np=self.earth,
-            size=128,
-            update_every_n_frames=10,
+            size=96,
+            update_every_n_frames=60,
         )
 
     def update_camera(self) -> None:
@@ -624,7 +650,6 @@ class EarthViewer(ShowBase):
         while self.sim_time >= self.enemy_next_spawn_time:
             self.enemy_next_spawn_time += timedelta(seconds=self.enemy_spawn_interval_s)
 
-        # Spawn next Galileo sat (random order)
         while self.enemy_galileo_cursor < len(self.enemy_galileo_indices):
             idx = self.enemy_galileo_indices[self.enemy_galileo_cursor]
             self.enemy_galileo_cursor += 1
@@ -944,14 +969,17 @@ class EarthViewer(ShowBase):
     ) -> dict:
         object_id = f"BUY-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
 
+        raan_deg = random.uniform(0.0, 360.0)
+        phase_deg = random.uniform(0.0, 360.0)
+
         return {
             "kind": "custom",
             "team": "player",
             "OBJECT_ID": object_id,
             "altitude_km": float(altitude_km),
             "inclination_deg": float(inclination_deg),
-            "raan_deg": 0.0,
-            "phase_deg": 0.0,
+            "raan_deg": float(raan_deg),
+            "phase_deg": float(phase_deg),
             "epoch_utc": datetime.now(timezone.utc).isoformat(),
             "size": float(size),
             "power": float(size),
