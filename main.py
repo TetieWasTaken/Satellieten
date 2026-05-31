@@ -444,14 +444,6 @@ class EarthViewer(ShowBase):
         self.accept("[", self.slow_down)
         self.accept("\\", self.reset_speed)
 
-        self.accept("n", self.add_next_satellite)
-        self.accept("m", self.remove_selected_satellite)
-        self.accept("tab", self.cycle_selected_satellite)
-        self.accept("c", self.clear_satellites)
-
-        self.accept("e", self.add_next_satellite)
-        self.accept("q", self.cycle_selected_back)
-
         self.taskMgr.add(self.drag_task, "DragTask")
         self.taskMgr.add(self.camera_smooth_task, "CameraSmoothTask")
         self.taskMgr.add(self.zoom_task, "ZoomTask")
@@ -463,8 +455,6 @@ class EarthViewer(ShowBase):
         self.taskMgr.add(self.earn_money_task, "EarnMoney")
 
         self.taskMgr.add(self.enemy_spawn_task, "EnemySpawnTask")
-
-        self.accept("r", self.spawn_test_enemy_satellite)
 
     def spawn_test_enemy_satellite(self) -> None:
         rec = {
@@ -619,7 +609,6 @@ class EarthViewer(ShowBase):
             f"Time scale: {self.time_scale:.2f}x\n"
             f"Satellites: {len(self.sat_manager.satellites)}/{self.sat_manager.max_satellites}\n"
             f"Selected: {selected_id}{cov_line}\n"
-            f"[n] add  [m] remove  [tab] cycle  [c] clear\n"
             f"Income: ${self.income_per_sec:.0f}/s"
         )
 
