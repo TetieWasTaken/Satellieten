@@ -235,17 +235,23 @@ class SatelliteEntity:
         self.orbit = orbit
 
     def set_selected(self, selected: bool) -> None:
+        team = self.sat_record.get("team", "player")
+
         if self.model is not None and not self.model.isEmpty():
             if selected:
-                self.model.setScale(0.085)
-                self.model.setColor(1.0, 0.95, 0.2, 1.0)
+                self.model.setScale(0.11)
+                self.model.setColor(1.0, 1.0, 1.0, 1.0)
             else:
-                self.model.setScale(0.06)
-                self.model.setColor(*self.color)
+                if team == "enemy":
+                    self.model.setScale(0.06)
+                    self.model.setColor(1.0, 0.25, 0.25, 1.0)
+                else:
+                    self.model.setScale(0.06)
+                    self.model.setColor(0.25, 0.55, 1.0, 1.0)
 
         if self.orbit is not None and not self.orbit.isEmpty():
             if selected:
-                self.orbit.setColorScale(1.2, 1.2, 0.6, 1.0)
+                self.orbit.setColorScale(1.6, 1.6, 1.6, 1.0)
             else:
                 self.orbit.setColorScale(1.0, 1.0, 1.0, 1.0)
 
@@ -417,6 +423,7 @@ class EarthViewer(ShowBase):
         )
 
         self.money: int = 10000
+        self.money_float = float(self.money)
 
         self.money_ui = OnscreenText(
             text="",
@@ -435,6 +442,16 @@ class EarthViewer(ShowBase):
         self.income_per_sec: float = 0.0
         self.base_income_per_sec: float = 250.0
 
+        self.enemy_money: float = 25000.0
+        self.enemy_income_per_sec: float = 180.0
+        self.enemy_kill_check_interval_s = 20.0
+        self.enemy_next_kill_check = datetime.now(timezone.utc) + timedelta(
+            seconds=self.enemy_kill_check_interval_s
+        )
+
+        self.taskMgr.add(self.enemy_economy_task, "EnemyEconomy")
+        self.taskMgr.add(self.enemy_kill_task, "EnemyKillTask")
+
         self._build_purchase_ui()
         self._refresh_purchase_ui()
 
@@ -450,6 +467,12 @@ class EarthViewer(ShowBase):
         self.accept("[", self.slow_down)
         self.accept("\\", self.reset_speed)
 
+        self.accept("tab", self.select_next_enemy_satellite)
+        self.accept("shift-tab", self.select_prev_enemy_satellite)
+        self.accept("backspace", self.select_prev_enemy_satellite)
+
+        self.accept("x", self.player_eliminate_selected_enemy)
+
         self.taskMgr.add(self.drag_task, "DragTask")
         self.taskMgr.add(self.camera_smooth_task, "CameraSmoothTask")
         self.taskMgr.add(self.zoom_task, "ZoomTask")
@@ -461,6 +484,9 @@ class EarthViewer(ShowBase):
         self.taskMgr.add(self.earn_money_task, "EarnMoney")
 
         self.taskMgr.add(self.enemy_spawn_task, "EnemySpawnTask")
+
+        self.event_msg = ""
+        self.event_msg_until = datetime.now(timezone.utc)
 
         self.spawn_initial_enemy_galileo()
 
@@ -542,6 +568,29 @@ class EarthViewer(ShowBase):
             update_every_n_frames=60,
         )
 
+    def player_eliminate_selected_enemy(self) -> None:
+        selected = self.sat_manager.get_selected_record()
+        if not selected:
+            return
+        if selected.get("team", "player") != "enemy":
+            return
+
+        cost = self.eliminate_cost(selected)
+        if not self.spend_money(cost):
+            print(f"[player] Not enough money to eliminate ({cost}).")
+            return
+
+        removed = self.eliminate_satellite(selected)
+        if removed:
+            print(
+                f"[player] Eliminated enemy sat {selected.get('OBJECT_ID')} for ${cost}."
+            )
+            self.push_event(
+                f"You eliminated enemy sat {selected.get('OBJECT_ID')} (-${cost})"
+            )
+        else:
+            self.add_money(cost)
+
     def update_camera(self) -> None:
         h_rad = math.radians(self.camera_h)
         p_rad = math.radians(self.camera_p)
@@ -579,6 +628,10 @@ class EarthViewer(ShowBase):
                 )
 
         return Task.cont
+
+    def push_event(self, text: str, seconds: float = 3.0) -> None:
+        self.event_msg = text
+        self.event_msg_until = datetime.now(timezone.utc) + timedelta(seconds=seconds)
 
     def set_zoom_in(self) -> None:
         self.zoom_dir = -1
@@ -630,12 +683,30 @@ class EarthViewer(ShowBase):
             else:
                 cov_line = f"\nCoverage: unknown"
 
+        if datetime.now(timezone.utc) > self.event_msg_until:
+            self.event_msg = ""
+
+        selected = self.sat_manager.get_selected_record()
+        if selected and selected.get("team", "player") == "enemy":
+            del_cost = self.eliminate_cost(selected)
+            can_afford = self.money >= del_cost
+            del_line = f"Delete (X): ${del_cost} " + (
+                "[OK]" if can_afford else "[too expensive]"
+            )
+        else:
+            del_line = "Delete (X): select an enemy satellite"
+
+        sel_id = selected["OBJECT_ID"] if selected else "None"
         self.hud.setText(
             f"Sim time: {self.sim_time.strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
             f"Time scale: {self.time_scale:.2f}x\n"
             f"Satellites: {len(self.sat_manager.satellites)}/{self.sat_manager.max_satellites}\n"
-            f"Selected: {selected_id}{cov_line}\n"
-            f"Income: ${self.income_per_sec:.0f}/s"
+            f"Selected enemy: {sel_id}\n"
+            f"{del_line}\n"
+            f"Select enemy: [Tab]=next  [Backspace]=prev\n"
+            f"Income: ${self.income_per_sec:.0f}/s\n"
+            f"Enemy money: ${self.enemy_money}\n"
+            f"{self.event_msg}"
         )
 
         self.money_ui.setText(f"${self.money}")
@@ -674,6 +745,82 @@ class EarthViewer(ShowBase):
 
         return Task.cont
 
+    def enemy_economy_task(self, __task__):
+        dt = globalClock.getDt()
+        self.enemy_money += self.enemy_income_per_sec * dt
+        return Task.cont
+
+    def enemy_kill_task(self, __task__):
+        now = datetime.now(timezone.utc)
+        if now < self.enemy_next_kill_check:
+            return Task.cont
+        self.enemy_next_kill_check = now + timedelta(
+            seconds=self.enemy_kill_check_interval_s
+        )
+
+        player_sats = [
+            s.sat_record
+            for s in self.sat_manager.satellites
+            if s.sat_record.get("team", "player") == "player"
+        ]
+        if not player_sats:
+            return Task.cont
+
+        target = random.choice(player_sats)
+        cost = self.eliminate_cost(target)
+
+        if self.enemy_money < cost:
+            return Task.cont
+
+        self.enemy_money -= cost
+        removed = self.eliminate_satellite(target)
+        if removed:
+            print(
+                f"[enemy] Eliminated player sat {target.get('OBJECT_ID')} (cost ${cost})."
+            )
+            self.push_event(f"Your satellite {target.get('OBJECT_ID')} was eliminated!")
+
+        return Task.cont
+
+    def _enemy_indices(self) -> list[int]:
+        return [
+            i
+            for i, s in enumerate(self.sat_manager.satellites)
+            if s.sat_record.get("team", "player") == "enemy"
+        ]
+
+    def select_next_enemy_satellite(self) -> None:
+        enemies = self._enemy_indices()
+        if not enemies:
+            self.sat_manager.selected_idx = -1
+            self.sat_manager._refresh_selection()
+            self.push_event("No enemy satellites to select.")
+            return
+
+        if self.sat_manager.selected_idx not in enemies:
+            self.sat_manager.selected_idx = enemies[0]
+        else:
+            k = enemies.index(self.sat_manager.selected_idx)
+            self.sat_manager.selected_idx = enemies[(k + 1) % len(enemies)]
+
+        self.sat_manager._refresh_selection()
+
+    def select_prev_enemy_satellite(self) -> None:
+        enemies = self._enemy_indices()
+        if not enemies:
+            self.sat_manager.selected_idx = -1
+            self.sat_manager._refresh_selection()
+            self.push_event("No enemy satellites to select.")
+            return
+
+        if self.sat_manager.selected_idx not in enemies:
+            self.sat_manager.selected_idx = enemies[-1]
+        else:
+            k = enemies.index(self.sat_manager.selected_idx)
+            self.sat_manager.selected_idx = enemies[(k - 1) % len(enemies)]
+
+        self.sat_manager._refresh_selection()
+
     def speed_up(self) -> None:
         self.time_scale *= 2.0
 
@@ -701,6 +848,7 @@ class EarthViewer(ShowBase):
         self.sat_manager.clear_all()
 
     def add_money(self, amount: int) -> None:
+        self.money_float += float(amount)
         self.money += int(amount)
 
     def spend_money(self, amount: int) -> bool:
@@ -709,7 +857,10 @@ class EarthViewer(ShowBase):
             return True
         if self.money < amount:
             return False
+
+        self.money_float -= float(amount)
         self.money -= amount
+
         return True
 
     def _infer_altitude_km_from_pos(self, sat_record: dict) -> float | None:
@@ -972,6 +1123,8 @@ class EarthViewer(ShowBase):
         raan_deg = random.uniform(0.0, 360.0)
         phase_deg = random.uniform(0.0, 360.0)
 
+        build_cost = self._estimate_satellite_cost(altitude_km, inclination_deg, size)
+
         return {
             "kind": "custom",
             "team": "player",
@@ -983,7 +1136,37 @@ class EarthViewer(ShowBase):
             "epoch_utc": datetime.now(timezone.utc).isoformat(),
             "size": float(size),
             "power": float(size),
+            "build_cost": int(build_cost),
         }
+
+    def estimate_sat_build_cost(self, record: dict) -> int:
+        if "build_cost" in record:
+            return int(record["build_cost"])
+
+        alt = self._satellite_altitude_km(record) or 20000.0
+        strength = self._satellite_strength(record)
+
+        base = 2000
+        altitude_cost = int(max(0.0, alt - 200.0) * 0.08)
+        strength_cost = int(2500 * (float(strength) ** 1.4))
+        return base + altitude_cost + strength_cost
+
+    def eliminate_cost(self, record: dict) -> int:
+        kill_cost_multiplier = 6.0  # "a lot of money"
+        return int(kill_cost_multiplier * self.estimate_sat_build_cost(record))
+
+    def eliminate_satellite(self, record: dict) -> bool:
+        obj_id = record.get("OBJECT_ID")
+        if not obj_id:
+            return False
+
+        for i, sat in enumerate(list(self.sat_manager.satellites)):
+            if sat.sat_record.get("OBJECT_ID") == obj_id:
+                self.sat_manager.selected_idx = i
+                self.sat_manager.remove_selected()
+                return True
+
+        return False
 
     def _satellite_altitude_km(self, record: dict) -> float | None:
         if record.get("kind") == "custom":
@@ -1101,7 +1284,8 @@ class EarthViewer(ShowBase):
 
     def earn_money_task(self, __task__):
         dt = globalClock.getDt()
-        self.money += int(self.income_per_sec * dt)
+        self.money_float += self.income_per_sec * dt
+        self.money = int(self.money_float)
         return Task.cont
 
 
