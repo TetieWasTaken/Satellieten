@@ -369,7 +369,7 @@ class EarthViewer(ShowBase):
         self.setup_earth()
 
         self.sim_time = datetime.now(timezone.utc)
-        self.time_scale = 1.0
+        self.time_scale = 64.0
 
         self.sat_manager = SatelliteManager(
             self.render, self.loader, max_satellites=100
