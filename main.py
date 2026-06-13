@@ -506,6 +506,7 @@ class EarthViewer(ShowBase):
             return
 
         rec["team"] = "enemy"
+
         ok = self.sat_manager.add_satellite_from_record(rec, self.sim_time)
         if ok:
             print(f"[enemy] Spawned initial Galileo index {idx}")
@@ -736,10 +737,15 @@ class EarthViewer(ShowBase):
                 self.enemy_galileo_cursor = len(self.enemy_galileo_indices)
                 return Task.cont
 
+            cost = self.estimate_sat_build_cost(rec)
+            print(f"[enemy] spawn cost: {cost}")
+
             rec["team"] = "enemy"
             ok = self.sat_manager.add_satellite_from_record(rec, self.sim_time)
-            if ok:
+
+            if ok and (self.enemy_money > cost):
                 print(f"[enemy] Spawned Galileo index {idx}")
+                self.enemy_money -= cost
             else:
                 print("[enemy] Max satellites reached; cannot spawn more.")
                 self.enemy_galileo_cursor = len(self.enemy_galileo_indices)
