@@ -818,41 +818,43 @@ class EarthViewer(ShowBase):
 
     def enemy_spawn_task(self, __task__):
         if (
-            self.sim_time < self.enemy_next_spawn_time
-            or (not self.game_started)
+            not self.game_started
             or self.game_over
+            or self.sim_time < self.enemy_next_spawn_time
         ):
             return Task.cont
 
         while self.sim_time >= self.enemy_next_spawn_time:
             self.enemy_next_spawn_time += timedelta(seconds=self.enemy_spawn_interval_s)
 
-        while self.enemy_galileo_cursor < len(self.enemy_galileo_indices):
-            idx = self.enemy_galileo_indices[self.enemy_galileo_cursor]
+        if self.enemy_galileo_cursor >= len(self.enemy_galileo_indices):
+            return Task.cont
+
+        idx = self.enemy_galileo_indices[self.enemy_galileo_cursor]
+
+        try:
+            rec = server.get_sat_record(idx)
+        except Exception:
+            print("[enemy] Failed to fetch Galileo record.")
+            return Task.cont
+
+        cost = self.estimate_sat_build_cost(rec)
+        print(f"[enemy] spawn cost: {cost}")
+
+        if self.enemy_money < cost:
+            print(
+                f"[enemy] Can't afford Galileo index {idx}. (cost: {cost} | money: {self.enemy_money})"
+            )
+            return Task.cont
+
+        rec["team"] = "enemy"
+        ok = self.sat_manager.add_satellite_from_record(rec, self.sim_time)
+        if ok:
+            self.enemy_money -= cost
             self.enemy_galileo_cursor += 1
-
-            try:
-                rec = server.get_sat_record(idx)
-            except Exception:
-                print(
-                    "[enemy] No more Galileo records (or fetch failed). Stopping spawns."
-                )
-                self.enemy_galileo_cursor = len(self.enemy_galileo_indices)
-                return Task.cont
-
-            cost = self.estimate_sat_build_cost(rec)
-            print(f"[enemy] spawn cost: {cost}")
-
-            rec["team"] = "enemy"
-            ok = self.sat_manager.add_satellite_from_record(rec, self.sim_time)
-
-            if ok and (self.enemy_money > cost):
-                print(f"[enemy] Spawned Galileo index {idx}")
-                self.enemy_money -= cost
-            else:
-                print("[enemy] Max satellites reached; cannot spawn more.")
-                self.enemy_galileo_cursor = len(self.enemy_galileo_indices)
-            break
+            print(f"[enemy] Spawned Galileo index {idx}")
+        else:
+            print("[enemy] Max satellites reached")
 
         return Task.cont
 
