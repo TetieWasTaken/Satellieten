@@ -201,6 +201,11 @@ class SatelliteEntity:
         self._build_model(sim_time)
         self._build_orbit_line()
 
+        self.pulse_phase = random.uniform(0.0, math.tau)
+        self.base_scale = 0.06
+
+        self._selected = False
+
     def _build_model(self, sim_time: datetime) -> None:
         model = self.loader.loadModel("models/misc/sphere")
         if model is None or model.isEmpty():
@@ -236,26 +241,34 @@ class SatelliteEntity:
         orbit.reparentTo(self.render)
         self.orbit = orbit
 
-    def set_selected(self, selected: bool) -> None:
+    def update_visuals(self) -> None:
         team = self.sat_record.get("team", "player")
+        is_selected = getattr(self, "_selected", False)
 
         if self.model is not None and not self.model.isEmpty():
-            if selected:
-                self.model.setScale(0.11)
-                self.model.setColor(1.0, 1.0, 1.0, 1.0)
+            if is_selected:
+                pulse = 1.0 + 0.30 * math.sin(
+                    globalClock.getFrameTime() * 5.0 + self.pulse_phase
+                )
+                self.model.setScale(0.11 * pulse)
+                self.model.setColor(0.0, 1.0, 0.0, 1.0)
             else:
                 if team == "enemy":
-                    self.model.setScale(0.06)
+                    self.model.setScale(self.base_scale)
                     self.model.setColor(1.0, 0.25, 0.25, 1.0)
                 else:
-                    self.model.setScale(0.06)
+                    self.model.setScale(self.base_scale)
                     self.model.setColor(0.25, 0.55, 1.0, 1.0)
 
         if self.orbit is not None and not self.orbit.isEmpty():
-            if selected:
-                self.orbit.setColorScale(1.6, 1.6, 1.6, 1.0)
+            if is_selected:
+                self.orbit.setColorScale(2.0, 2.0, 2.0, 1.0)
             else:
                 self.orbit.setColorScale(1.0, 1.0, 1.0, 1.0)
+
+    def set_selected(self, selected: bool) -> None:
+        self._selected = selected
+        self.update_visuals()
 
     def update_simulation(self, sim_time: datetime) -> None:
         if self.model is not None and not self.model.isEmpty():
@@ -289,6 +302,10 @@ class SatelliteManager:
             (0.9, 0.4, 1.0, 1.0),
             (1.0, 0.9, 0.3, 1.0),
         ]
+
+    def update_visuals(self) -> None:
+        for sat in self.satellites:
+            sat.update_visuals()
 
     def add_satellite_from_record(self, sat_record: dict, sim_time: datetime) -> bool:
         if len(self.satellites) >= self.max_satellites:
@@ -488,6 +505,20 @@ class EarthViewer(ShowBase):
         self.accept("backspace", self.select_prev_enemy_satellite)
 
         self.accept("x", self.player_eliminate_selected_enemy)
+
+        self.controls_ui = OnscreenText(
+            text=(
+                "[Tab]/[Backspace] select enemy sats "
+                "[X] delete selected enemy sat "
+                "[Arrows] rotate/zoom camera "
+                "[Mouse] move camera"
+            ),
+            pos=(-1.33, -0.95),
+            scale=0.04,
+            fg=(0.85, 0.9, 1.0, 1.0),
+            align=TextNode.ALeft,
+            mayChange=False,
+        )
 
         self.taskMgr.add(self.drag_task, "DragTask")
         self.taskMgr.add(self.camera_smooth_task, "CameraSmoothTask")
@@ -745,6 +776,8 @@ class EarthViewer(ShowBase):
 
         self.earth_root.setH(-gmst_degrees(self.sim_time))
         self.sat_manager.update_simulation(self.sim_time)
+
+        self.sat_manager.update_visuals()
 
         self.check_end_condition()
 
