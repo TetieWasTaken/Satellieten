@@ -581,7 +581,6 @@ class EarthViewer(ShowBase):
             self.push_event("All enemy satellites eliminated. You win!", seconds=9999)
             if hasattr(self, "start_button") and self.start_button:
                 self.start_button.show()
-                self.start_button["text"] = "RESTART"
 
         if not player_left:
             if self.game_started_at is not None:
@@ -596,7 +595,6 @@ class EarthViewer(ShowBase):
             self.push_event("Your satellites were eliminated. You lose!", seconds=9999)
             if hasattr(self, "start_button") and self.start_button:
                 self.start_button.show()
-                self.start_button["text"] = "RESTART"
 
     def spawn_initial_enemy_galileo(self) -> None:
         if not self.enemy_galileo_indices:
