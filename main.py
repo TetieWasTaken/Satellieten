@@ -300,7 +300,7 @@ class SatelliteManager:
         )
 
         self.satellites.append(sat)
-        self.selected_idx = len(self.satellites) - 1
+        # self.selected_idx = len(self.satellites) - 1
         self._refresh_selection()
 
         return True
@@ -375,6 +375,13 @@ class EarthViewer(ShowBase):
     def __init__(self) -> None:
         super().__init__()
 
+        self.game_started = False
+        self.game_over = False
+        self.game_result = ""
+
+        self.grace_period_s = 180.0
+        self.game_started_at: datetime | None = None
+
         self.setBackgroundColor(0.02, 0.02, 0.04, 1)
         self.disableMouse()
 
@@ -435,6 +442,13 @@ class EarthViewer(ShowBase):
             align=TextNode.ARight,
         )
 
+        self.start_button = DirectButton(
+            text="START",
+            scale=0.08,
+            pos=(0, 0, 0),
+            command=self.start_game,
+        )
+
         self.pending_purchases: list[dict] = []
 
         self.purchase_altitude_km = 550.0
@@ -444,9 +458,9 @@ class EarthViewer(ShowBase):
         self.income_per_sec: float = 0.0
         self.base_income_per_sec: float = 250.0
 
-        self.enemy_money: float = 5000.0
-        self.enemy_income_per_sec: float = 180.0
-        self.enemy_kill_check_interval_s = 20.0
+        self.enemy_money: float = 3000.0
+        self.enemy_income_per_sec: float = 100.0
+        self.enemy_kill_check_interval_s = 30.0
         self.enemy_next_kill_check = datetime.now(timezone.utc) + timedelta(
             seconds=self.enemy_kill_check_interval_s
         )
@@ -490,7 +504,68 @@ class EarthViewer(ShowBase):
         self.event_msg = ""
         self.event_msg_until = datetime.now(timezone.utc)
 
+    def start_game(self) -> None:
+        self.game_started = True
+        self.game_over = False
+        self.game_result = ""
+
+        self.sat_manager.clear_all()
+        self.money = 5000.0
+        self.money_float = float(self.money)
+        self.enemy_money = 3000.0
+
+        self.sim_time = datetime.now(timezone.utc)
+        self.enemy_next_spawn_time = self.sim_time + timedelta(
+            seconds=self.enemy_spawn_interval_s
+        )
+        self.enemy_galileo_cursor = 0
+        random.shuffle(self.enemy_galileo_indices)
+
+        if hasattr(self, "start_button") and self.start_button:
+            self.start_button.hide()
+
         self.spawn_initial_enemy_galileo()
+
+        self.game_started_at = datetime.now(timezone.utc)
+
+        self.push_event("Game started!")
+
+    def check_end_condition(self) -> None:
+        if self.game_over or not self.game_started:
+            return
+
+        enemy_left = any(
+            s.sat_record.get("team", "player") == "enemy"
+            for s in self.sat_manager.satellites
+        )
+
+        player_left = any(
+            s.sat_record.get("team", "player") == "player"
+            for s in self.sat_manager.satellites
+        )
+
+        if not enemy_left:
+            self.game_over = True
+            self.game_result = "You win!"
+            self.push_event("All enemy satellites eliminated. You win!", seconds=9999)
+            if hasattr(self, "start_button") and self.start_button:
+                self.start_button.show()
+                self.start_button["text"] = "RESTART"
+
+        if not player_left:
+            if self.game_started_at is not None:
+                elapsed = (
+                    datetime.now(timezone.utc) - self.game_started_at
+                ).total_seconds()
+                if elapsed < self.grace_period_s:
+                    return
+
+            self.game_over = True
+            self.game_result = "You lose!"
+            self.push_event("Your satellites were eliminated. You lose!", seconds=9999)
+            if hasattr(self, "start_button") and self.start_button:
+                self.start_button.show()
+                self.start_button["text"] = "RESTART"
 
     def spawn_initial_enemy_galileo(self) -> None:
         if not self.enemy_galileo_indices:
@@ -662,11 +737,16 @@ class EarthViewer(ShowBase):
         return Task.cont
 
     def update_simulation_task(self, __task__):
+        if not self.game_started or self.game_over:
+            return Task.cont
+
         dt = globalClock.getDt()
         self.sim_time += timedelta(seconds=dt * self.time_scale)
 
         self.earth_root.setH(-gmst_degrees(self.sim_time))
         self.sat_manager.update_simulation(self.sim_time)
+
+        self.check_end_condition()
 
         return Task.cont
 
@@ -700,6 +780,23 @@ class EarthViewer(ShowBase):
             del_line = "Delete (X): select an enemy satellite"
 
         sel_id = selected["OBJECT_ID"] if selected else "None"
+
+        state_line = "RUNNING" if self.game_started and not self.game_over else "PAUSED"
+        if self.game_over:
+            state_line = self.game_result
+
+        if self.game_started_at is not None and not self.game_over:
+            elapsed = (
+                datetime.now(timezone.utc) - self.game_started_at
+            ).total_seconds()
+            if elapsed < self.grace_period_s:
+                grace_left = self.grace_period_s - elapsed
+                grace_line = f"Grace: {grace_left:.0f}s"
+            else:
+                grace_line = ""
+        else:
+            grace_line = ""
+
         self.hud.setText(
             f"Sim time: {self.sim_time.strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
             f"Time scale: {self.time_scale:.2f}x\n"
@@ -709,6 +806,8 @@ class EarthViewer(ShowBase):
             f"Select enemy: [Tab]=next  [Backspace]=prev\n"
             f"Income: ${self.income_per_sec:.0f}/s\n"
             f"Enemy money: ${self.enemy_money:,.0f}\n"
+            f"State: {state_line}\n"
+            f"{grace_line}\n"
             f"{self.event_msg}"
         )
 
@@ -718,7 +817,11 @@ class EarthViewer(ShowBase):
         return Task.cont
 
     def enemy_spawn_task(self, __task__):
-        if self.sim_time < self.enemy_next_spawn_time:
+        if (
+            self.sim_time < self.enemy_next_spawn_time
+            or (not self.game_started)
+            or self.game_over
+        ):
             return Task.cont
 
         while self.sim_time >= self.enemy_next_spawn_time:
@@ -759,6 +862,13 @@ class EarthViewer(ShowBase):
         return Task.cont
 
     def enemy_kill_task(self, __task__):
+        if not self.game_started or self.game_over:
+            return Task.cont
+
+        elapsed = (datetime.now(timezone.utc) - self.game_started_at).total_seconds()
+        if elapsed < self.grace_period_s:
+            return Task.cont
+
         now = datetime.now(timezone.utc)
         if now < self.enemy_next_kill_check:
             return Task.cont
@@ -1085,6 +1195,9 @@ class EarthViewer(ShowBase):
             self.cost_value["text_fg"] = (1.0, 0.45, 0.45, 1)
 
     def _buy_satellite_clicked(self, *args) -> None:
+        if not self.game_started or self.game_over:
+            return
+
         alt = self.purchase_altitude_km
         inc = self.purchase_inclination_deg
         size = self.purchase_size
@@ -1160,7 +1273,7 @@ class EarthViewer(ShowBase):
         return base + altitude_cost + strength_cost
 
     def eliminate_cost(self, record: dict) -> int:
-        kill_cost_multiplier = 6.0  # "a lot of money"
+        kill_cost_multiplier = 3.0
         return int(kill_cost_multiplier * self.estimate_sat_build_cost(record))
 
     def eliminate_satellite(self, record: dict) -> bool:
